@@ -1,11 +1,10 @@
 # Hadoop Install
 
-## 单机版
+## 单机版/分布式版
 
 ### 需要的软件/工具
 ```shell script
 jdk-8u162-linux-x64.tar.gz
-
 ```
 ### 环境
 本教程使用 Ubuntu 18.04 64位 作为系统环境（或者Ubuntu 14.04，Ubuntu16.04 也行，32位、64位均可），请自行安装系统（可参考使用VirtualBox安装Ubuntu）。
@@ -244,3 +243,90 @@ export HADOOP_HOME=/usr/local/hadoop
 export HADOOP_COMMON_LIB_NATIVE_DIR=$HADOOP_HOME/lib/native
 ```
 保存后，务必执行 source ~/.bashrc 使变量设置生效，然后再次执行 ./sbin/start-dfs.sh 启动 Hadoop。
+启动完成后，可以通过命令 jps 来判断是否成功启动，若成功启动则会列出如下进程: “NameNode”、”DataNode” 和 “SecondaryNameNode”（如果 SecondaryNameNode 没有启动，请运行 sbin/stop-dfs.sh 关闭进程，然后再次尝试启动尝试）。如果没有 NameNode 或 DataNode ，那就是配置不成功，请仔细检查之前步骤，或通过查看启动日志排查原因。
+```shell
+jps
+```
+```shell
+Hadoop无法正常启动的解决方法
+一般可以查看启动日志来排查原因，注意几点：
+
+启动时会提示形如 “DBLab-XMU: starting namenode, logging to /usr/local/hadoop/logs/hadoop-hadoop-namenode-DBLab-XMU.out”，其中 DBLab-XMU 对应你的机器名，但其实启动日志信息是记录在 /usr/local/hadoop/logs/hadoop-hadoop-namenode-DBLab-XMU.log 中，所以应该查看这个后缀为 .log 的文件；
+每一次的启动日志都是追加在日志文件之后，所以得拉到最后面看，对比下记录的时间就知道了。
+一般出错的提示在最后面，通常是写着 Fatal、Error、Warning 或者 Java Exception 的地方。
+可以在网上搜索一下出错信息，看能否找到一些相关的解决方法。
+此外，若是 DataNode 没有启动，可尝试如下的方法（注意这会删除 HDFS 中原有的所有数据，如果原有的数据很重要请不要这样做）：
+```
+```shell
+# 针对 DataNode 没法启动的解决方法
+cd /usr/local/hadoop
+./sbin/stop-dfs.sh              # 关闭
+rm -r ./tmp                     # 删除 tmp 文件，注意这会删除 HDFS 中原有的所有数据
+./bin/hdfs namenode -format     # 重新格式化 NameNode
+./sbin/start-dfs.sh             # 重启
+```
+成功启动后，可以访问 Web 界面 http://localhost:9870 查看 NameNode 和 Datanode 信息，还可以在线查看 HDFS 中的文件。
+### 运行Hadoop伪分布式实例
+上面的单机模式，grep 例子读取的是本地数据，伪分布式读取的则是 HDFS 上的数据。要使用 HDFS，首先需要在 HDFS 中创建用户目录：
+```shell
+./bin/hdfs dfs -mkdir -p /user/hadoop
+```
+```shell
+注意
+教材《大数据技术原理与应用》的命令是以”./bin/hadoop dfs”开头的Shell命令方式，实际上有三种shell命令方式。
+1. hadoop fs
+2. hadoop dfs
+3. hdfs dfs
+
+hadoop fs适用于任何不同的文件系统，比如本地文件系统和HDFS文件系统
+hadoop dfs只能适用于HDFS文件系统
+hdfs dfs跟hadoop dfs的命令作用一样，也只能适用于HDFS文件系统
+```
+接着将 ./etc/hadoop 中的 xml 文件作为输入文件复制到分布式文件系统中，即将 /usr/local/hadoop/etc/hadoop 复制到分布式文件系统中的 /user/hadoop/input 中。我们使用的是 hadoop 用户，并且已创建相应的用户目录 /user/hadoop ，因此在命令中就可以使用相对路径如 input，其对应的绝对路径就是 /user/hadoop/input:
+```shell
+./bin/hdfs dfs -mkdir input
+./bin/hdfs dfs -put ./etc/hadoop/*.xml input
+```
+复制完成后，可以通过如下命令查看文件列表：
+```shell
+./bin/hdfs dfs -ls input
+```
+伪分布式运行 MapReduce 作业的方式跟单机模式相同，区别在于伪分布式读取的是HDFS中的文件（可以将单机步骤中创建的本地 input 文件夹，输出结果 output 文件夹都删掉来验证这一点）。
+```shell
+./bin/hadoop jar ./share/hadoop/mapreduce/hadoop-mapreduce-examples-3.1.3.jar grep input output 'dfs[a-z.]+'
+```
+查看运行结果的命令（查看的是位于 HDFS 中的输出结果）：
+```shell
+./bin/hdfs dfs -cat output/*
+```
+注意到刚才我们已经更改了配置文件，所以运行结果不同。
+我们也可以将运行结果取回到本地：
+```shell
+rm -r ./output                          # 先删除本地的 output 文件夹（如果存在）
+./bin/hdfs dfs -get output ./output     # 将 HDFS 上的 output 文件夹拷贝到本机
+cat ./output/*
+```
+Hadoop 运行程序时，输出目录不能存在，否则会提示错误 “org.apache.hadoop.mapred.FileAlreadyExistsException: Output directory hdfs://localhost:9000/user/hadoop/output already exists” ，因此若要再次执行，需要执行如下命令删除 output 文件夹:
+```shell
+./bin/hdfs dfs -rm -r output    # 删除 output 文件夹
+```
+```shell
+运行程序时，输出目录不能存在
+运行 Hadoop 程序时，为了防止覆盖结果，程序指定的输出目录（如 output）不能存在，否则会提示错误，因此运行前需要先删除输出目录。在实际开发应用程序时，可考虑在程序中加上如下代码，能在每次运行时自动删除输出目录，避免繁琐的命令行操作：
+```
+```shell
+Configuration conf = new Configuration();
+Job job = new Job(conf);
+ 
+/* 删除输出目录 */
+Path outputPath = new Path(args[1]);
+outputPath.getFileSystem(conf).delete(outputPath, true);
+```
+若要关闭 Hadoop，则运行
+```shell
+./sbin/stop-dfs.sh
+```
+```shell
+注意
+下次启动 hadoop 时，无需进行 NameNode 的初始化，只需要运行 ./sbin/start-dfs.sh 就可以！
+```
